@@ -16,30 +16,41 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Parse supabase-host.yml
+      - name: Detect duplicate mapping keys
         run: |
           python3 - <<'EOF'
           import sys, yaml
+          from yaml.loader import SafeLoader
+
+          class DupCheckLoader(SafeLoader):
+              pass
+
+          def no_dup(loader, node, deep=False):
+              mapping = {}
+              for key_node, value_node in node.value:
+                  key = loader.construct_object(key_node, deep=deep)
+                  if key in mapping:
+                      raise ValueError(
+                          f"duplicate key {key!r} at line {key_node.start_mark.line + 1}"
+                      )
+                  mapping[key] = loader.construct_object(value_node, deep=deep)
+              return mapping
+
+          DupCheckLoader.add_constructor(
+              yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, no_dup
+          )
+
           path = ".github/workflows/supabase-host.yml"
           try:
-              with open(path, encoding="utf-8") as fh:
-                  doc = yaml.safe_load(fh)
+              yaml.load(open(path, encoding="utf-8"), Loader=DupCheckLoader)
+              print("no duplicate keys")
           except Exception as exc:                     # noqa: BLE001
-              print(f"YAML ERROR in {path}: {exc}")
+              print(f"DUPLICATE/STRUCTURE ERROR: {exc}")
               sys.exit(1)
-
-          print("parsed OK, top-level keys:", list(doc))
-          triggers = doc.get("on", doc.get(True))
-          print("triggers:", triggers)
-          jobs = doc.get("jobs") or {}
-          print("jobs:", list(jobs))
-          for name, job in jobs.items():
-              if not isinstance(job, dict) or "runs-on" not in job:
-                  print(f"PROBLEM: job {name!r} has no runs-on -> {job}")
-              for i, step in enumerate(job.get("steps") or []):
-                  if not isinstance(step, dict):
-                      print(f"PROBLEM: job {name!r} step {i} is not a mapping -> {step!r}")
-                      continue
-                  if not any(k in step for k in ("uses", "run")):
-                      print(f"PROBLEM: job {name!r} step {i} has neither uses: nor run: -> {step}")
           EOF
+
+      - name: actionlint supabase-host.yml
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash
+          ./actionlint .github/workflows/supabase-host.yml && echo "actionlint: clean"
