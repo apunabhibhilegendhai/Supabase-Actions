@@ -6,8 +6,13 @@
  *
  * Repo-specific behaviour:
  *   - Supabase-Actions (supabase-host.yml): 1 min grace — 24/7 session chaining
- *   - OpenDrive        (api-host.yml):      90 s grace — 24/7 session chaining
+ *   - OpenDrive        (opendrive.yml):     90 s grace — 24/7 session chaining
  *     (both are fast-polled EVERY minute so the handoff gap stays ~1-2 min)
+ *
+ * OpenDrive's workflow is not dedicated to hosting: the same `opendrive.yml` also runs CI on every
+ * push and the web publish, so its run history is a mix. Only the runs that actually start the API
+ * host count for liveness/throttle, and those are the ones whose `run-name` starts with
+ * "API host" (the workflow names them that way on purpose). `runNamePrefix` selects them.
  */
 
 const OWNER = "apunabhibhilegendhai";
@@ -25,12 +30,16 @@ const REPO_CONFIGS = [
   // `failure` and MUST be restarted.
   { repo: "Supabase-Actions", workflow: "supabase-host.yml", branch: "master", graceMs: 60 * 1000, throttleMax: 12, fastPoll: true, restartOnFailure: true },
 
-  // OpenDrive API host. Sessions run ~5h then stop, same 24/7 chaining.
+  // OpenDrive API host. Sessions run ~5h then stop, same 24/7 chaining. This is a single workflow
+  // that also carries CI and the web publish, so `runNamePrefix` restricts every liveness and
+  // throttle decision to the runs that actually host the API — otherwise a busy push day would
+  // look like a string of short "sessions" and both throttle the restarts and (because a failed CI
+  // run is short) trip the pre-flight guard below.
   // restartOnFailure: false — this workflow fails *fast* only in its up-front
   // pre-flight (unreachable DATABASE_URL / tunnel), and restarting that would be
   // a ~5-minute crash loop. A *late* failure (preempted runner, hard kill) is
   // still restarted: the guard ignores the failure only when the run was short.
-  { repo: "OpenDrive", workflow: "api-host.yml", branch: "main", graceMs: 90 * 1000, throttleMax: 10, fastPoll: true, restartOnFailure: false },
+  { repo: "OpenDrive", workflow: "opendrive.yml", branch: "main", runNamePrefix: "API host", graceMs: 90 * 1000, throttleMax: 10, fastPoll: true, restartOnFailure: false },
 ];
 
 const THROTTLE_WINDOW = 24 * 60 * 60 * 1000; // 24 hours
@@ -116,6 +125,15 @@ function fmtDuration(ms) {
   const m = Math.floor((ms % 3600000) / 60000);
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+// A repo config may restrict which runs count (see `runNamePrefix`). OpenDrive's single workflow
+// carries CI, web publishes and API sessions in one run history; only the API sessions may drive
+// liveness or the throttle, and those are exactly the runs named "API host…".
+function selectRuns(runs, config) {
+  const prefix = config.runNamePrefix;
+  if (!prefix) return runs;
+  return runs.filter((r) => typeof r.name === "string" && r.name.startsWith(prefix));
 }
 
 // ===== Discord notifications =================================================
@@ -280,13 +298,17 @@ function renderMetrics(repos) {
 
 async function evaluateRepo(config, headers) {
   const { repo, workflow, graceMs, throttleMax } = config;
+  // Fetch a wide window, then drop runs that are not sessions of the long-running host. A single
+  // workflow that also carries CI can otherwise bury the in-progress session under a busy day of
+  // push runs and look "idle".
   const resp = await ghFetch(
-    `https://api.github.com/repos/${OWNER}/${repo}/actions/workflows/${workflow}/runs?per_page=30`,
+    `https://api.github.com/repos/${OWNER}/${repo}/actions/workflows/${workflow}/runs?per_page=100`,
     headers
   );
   if (!resp.ok) throw new Error(`runs API: ${resp.status}`);
 
-  const { workflow_runs: runs } = await resp.json();
+  const { workflow_runs: allRuns } = await resp.json();
+  const runs = selectRuns(allRuns || [], config);
   const state = {
     name: repo,
     needsRestart: false,
@@ -410,13 +432,15 @@ async function healthCheck(config, headers) {
   for (let i = 0; i < HEALTH_CHECK_RETRIES; i++) {
     await new Promise((r) => setTimeout(r, HEALTH_CHECK_INTERVAL));
     const resp = await ghFetch(
-      `https://api.github.com/repos/${OWNER}/${repo}/actions/workflows/${workflow}/runs?per_page=1`,
+      `https://api.github.com/repos/${OWNER}/${repo}/actions/workflows/${workflow}/runs?per_page=10`,
       headers
     );
     if (!resp.ok) continue;
     const { workflow_runs: runs } = await resp.json();
-    if (!runs || runs.length === 0) continue;
-    const latest = runs[0];
+    // The dispatched session is the newest run *of its kind*: a push CI run may have landed after
+    // it, so look only at the API-session runs.
+    const latest = selectRuns(runs || [], config)[0];
+    if (!latest) continue;
     const runAge = Date.now() - new Date(latest.created_at).getTime();
     if (runAge < HEALTH_CHECK_INTERVAL * (i + 1) + 10000) {
       // A run created since we dispatched proves the dispatch took effect.
