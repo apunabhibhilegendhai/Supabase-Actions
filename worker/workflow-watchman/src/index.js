@@ -26,16 +26,21 @@ const REPO_CONFIGS = [
   { repo: "Supabase-Actions", workflow: "supabase-host.yml", branch: "master", graceMs: 60 * 1000, throttleMax: 12, fastPoll: true, restartOnFailure: true },
 
   // OpenDrive API host. Sessions run ~5h then stop, same 24/7 chaining.
-  // restartOnFailure: false — this workflow only ever fails *fast*, in its
-  // up-front pre-flight (unreachable DATABASE_URL / tunnel), so restarting a
-  // `failure` would be a ~5-minute crash loop. Normal completion is chained by
-  // the workflow itself; a cancel or hard kill is what the worker is for.
+  // restartOnFailure: false — this workflow fails *fast* only in its up-front
+  // pre-flight (unreachable DATABASE_URL / tunnel), and restarting that would be
+  // a ~5-minute crash loop. A *late* failure (preempted runner, hard kill) is
+  // still restarted: the guard ignores the failure only when the run was short.
   { repo: "OpenDrive", workflow: "api-host.yml", branch: "main", graceMs: 90 * 1000, throttleMax: 10, fastPoll: true, restartOnFailure: false },
 ];
 
 const THROTTLE_WINDOW = 24 * 60 * 60 * 1000; // 24 hours
 const HEALTH_CHECK_RETRIES = 6;
 const HEALTH_CHECK_INTERVAL = 30 * 1000; // 30 seconds
+
+// A FAILED run shorter than this is treated as an up-front pre-flight failure
+// (see the crash-loop guard in evaluateRepo); anything longer died mid-session
+// and is restarted. OpenDrive's pre-flight takes ~5 min, a real session ~5 h.
+const MID_SESSION_MIN_MS = 30 * 60 * 1000;
 
 // ===== Per-repo dispatch/notify guards =======================================
 // lastDispatchAt: prevents double-dispatch races when the schedule-queued run
@@ -323,13 +328,20 @@ async function evaluateRepo(config, headers) {
   // Grace period check
   if (age < graceMs) return state;
 
-  // Per-repo crash-loop guard: some workflows only ever fail *fast* (a pre-flight
-  // against an unreachable database), so restarting them on `failure` is a tight
-  // loop, not a recovery. Those opt out and fall back to their hourly schedule.
-  // Defaults to restarting on failure (a mid-session death must be recovered).
+  // Per-repo crash-loop guard. Some workflows (OpenDrive's api-host) only ever
+  // fail *fast*, in an up-front pre-flight against an unreachable database, so a
+  // blanket "restart on failure" would loop every few minutes. But a failure
+  // that came *late* means the session died mid-flight (preempted runner, hard
+  // kill) and MUST be recovered — the hourly schedule is not a reliable backstop
+  // for this account. So a `failure` is ignored only when the run was short.
+  // restartOnFailure defaults to true: repos without the flag always restart.
   if (config.restartOnFailure === false && latest.conclusion === "failure") {
-    state.reason = "Last run failed — not auto-restarting (crash-loop guard)";
-    return state;
+    const startedAt = new Date(latest.run_started_at || latest.created_at).getTime();
+    const ranMs = Number.isFinite(startedAt) ? endedAt - startedAt : 0;
+    if (ranMs < MID_SESSION_MIN_MS) {
+      state.reason = `Last run failed after ${fmtDuration(ranMs)} — pre-flight, not restarting`;
+      return state;
+    }
   }
 
   // Throttle check — count completions within the 24h window from fetched runs
