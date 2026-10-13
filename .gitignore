@@ -5,6 +5,11 @@
 # Remote control credentials for ./remote.sh (contains the service_role key!)
 /remote.env
 
+# Generated OpenDrive infrastructure credentials (Postgres/JWT/Redis passwords
+# and the anon + service_role keys). These belong in GitHub Actions secrets,
+# never in a repository — least of all a public one.
+/opendrive-infra-credentials.txt
+
 # OS files
 .DS_Store
 Thumbs.db

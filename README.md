@@ -1,6 +1,6 @@
 # 🚀 Supabase Self-Hosted on GitHub Actions
 
-[![Supabase Self-Hosted](https://github.com/lawdachuss/supabase-actions/actions/workflows/supabase-host.yml/badge.svg)](https://github.com/lawdachuss/supabase-actions/actions/workflows/supabase-host.yml)
+[![Supabase Self-Hosted](https://github.com/apunabhibhilegendhai/Supabase-Actions/actions/workflows/supabase-host.yml/badge.svg)](https://github.com/apunabhibhilegendhai/Supabase-Actions/actions/workflows/supabase-host.yml)
 
 **Run Supabase (no object storage) on free GitHub Actions runners with a permanent URL via Cloudflare Tunnel.**
 
