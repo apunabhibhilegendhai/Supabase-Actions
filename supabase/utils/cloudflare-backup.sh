@@ -47,6 +47,7 @@ CF_ENV="$BASE_DIR/.env"
 CHUNK_BYTES=$((24 * 1024 * 1024))   # 24 MiB (KV hard limit is 25 MiB)
 KEEP_ARCHIVES=1                      # generations kept under archive/ (oldest pruned)
 MIN_PUSH_BYTES=30000                     # floor: anything this small is an empty/aborted dump
+RESTORE_ATTEMPTS=5                       # reads before giving up on a restore (see cmd_restore)
 # (A healthy Supabase DB dump is normally far above this; snapshot-state.sh keeps the last
 # good dump around and guards its own tiny-dump clobbering, so a sub-30KB full archive is
 # near-certainly empty. The 500KB guard we started with wrongly suppressed legitimately
@@ -254,17 +255,11 @@ cmd_push() {
   rm -rf "$tmp"
 }
 
-cmd_restore() {
-  # argv is ARGUMENTS ONLY (dispatcher shifts the subcommand). cmd_verify calls this
-  # with a single path, so "$2" was empty and restore always printed its usage line.
-  local outfile="${1:-}"
-  load_cfg
-  if ! cfg_ok; then
-    echo "  ☁️  Cloudflare restore SKIPPED — CF_API_TOKEN/CF_KV_NAMESPACE_ID not configured"
-    return 0
-  fi
-  [ -n "$outfile" ] || { echo "  ⚠️  usage: cloudflare-backup.sh restore <outfile>"; return 1; }
-
+# One attempt at restoring $1. Returns 0 when the manifest and the parts it
+# describes read back consistently — or when there is no backup at all — and 1
+# when they do not, which is what a concurrent cmd_push looks like from here.
+restore_once() {
+  local outfile="$1"
   local tmp manifest mf base parts size sha ok part
   tmp="$(mktemp -d)"
   ok=1
@@ -313,6 +308,42 @@ cmd_restore() {
   fi
   echo "  ☁️  restored from Cloudflare: $outfile (${parts} chunks, $(du -h "$outfile" | cut -f1), sha256 ok)"
   rm -rf "$tmp"
+  return 0
+}
+
+# cmd_push OVERWRITES latest/<parts> in place and only afterwards republishes
+# latest/manifest.json, so a push landing between our manifest read and our
+# part reads hands us an old sha256 with new bytes: same size, different
+# digest. Reading archive/<ts>/ instead does not help — KEEP_ARCHIVES=1 prunes
+# the previous generation the moment the new one lands, so that read fails as a
+# missing chunk rather than a bad digest. Both windows are transient and the
+# pair is consistent again as soon as the in-flight push finishes, so re-read
+# it rather than switch to a different key set.
+cmd_restore() {
+  # argv is ARGUMENTS ONLY (dispatcher shifts the subcommand). cmd_verify calls this
+  # with a single path, so "$2" was empty and restore always printed its usage line.
+  local outfile="${1:-}"
+  load_cfg
+  if ! cfg_ok; then
+    echo "  ☁️  Cloudflare restore SKIPPED — CF_API_TOKEN/CF_KV_NAMESPACE_ID not configured"
+    return 0
+  fi
+  [ -n "$outfile" ] || { echo "  ⚠️  usage: cloudflare-backup.sh restore <outfile>"; return 1; }
+
+  local attempt
+  for ((attempt = 1; attempt <= RESTORE_ATTEMPTS; attempt++)); do
+    if restore_once "$outfile"; then
+      return 0
+    fi
+    echo "  ⏳  restore read a half-written backup (attempt ${attempt}/${RESTORE_ATTEMPTS}) — retrying in 2s"
+    rm -f "$outfile"
+    if [ "$attempt" -lt "$RESTORE_ATTEMPTS" ]; then
+      sleep 2
+    fi
+  done
+  echo "  ⚠️  restore failed after ${RESTORE_ATTEMPTS} attempts — the backup is inconsistent"
+  rm -f "$outfile"
+  return 1
 }
 
 # Print the unix ts of the freshest off-site backup (stdout only, nothing on
