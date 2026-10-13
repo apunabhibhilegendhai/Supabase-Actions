@@ -23,5 +23,25 @@ jobs:
       - name: Deploy the Worker
         working-directory: worker/workflow-watchman
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_BACKUP_TOKEN }}
-        run: npx --yes wrangler@3 deploy
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_BACKUP_TOKEN }}
+          CF_BACKUP_ACCOUNT_ID: ${{ vars.CF_BACKUP_ACCOUNT_ID || '1b0b7964eefd07d50f77f95b61799b9d' }}
+          CF_BACKUP_KV_NAMESPACE_ID: ${{ vars.CF_BACKUP_KV_NAMESPACE_ID || 'df7be92c5212458884bcceca632cd6b0' }}
+        run: |
+          set -euo pipefail
+          # CLOUDFLARE_BACKUP_TOKEN can be either:
+          #   * a permanent account API token (scoped to "Workers KV Storage: Edit") — use as-is
+          #   * an OAuth refresh token starting with "cfor" (from `wrangler login`) — mint access token first
+          if [[ "${CF_API_TOKEN}" == cfor* ]]; then
+            echo "Exchanging OAuth refresh token for access token..."
+            AT=$(curl -sS -X POST https://dash.cloudflare.com/oauth/token \
+              -d "grant_type=refresh_token&refresh_token=${CF_API_TOKEN}&client_id=54d11594-84e4-41aa-b438-e81b8fa78ee7" \
+              | jq -r '.access_token // empty')
+            if [ -z "$AT" ]; then
+              echo "::error::Failed to exchange refresh token for access token"
+              exit 1
+            fi
+            CF_API_TOKEN="$AT"
+          fi
+          npx --yes wrangler@3 deploy \
+            --account-id "$CF_BACKUP_ACCOUNT_ID" \
+            --env CF_API_TOKEN:"$CF_API_TOKEN"
