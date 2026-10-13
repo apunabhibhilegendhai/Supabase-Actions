@@ -336,13 +336,21 @@ jobs:
       - name:  Wire Cloudflare backup creds
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_BACKUP_TOKEN }}
+          CF_BACKUP_ACCOUNT_ID: ${{ vars.CF_BACKUP_ACCOUNT_ID || secrets.CF_BACKUP_ACCOUNT_ID }}
+          CF_BACKUP_KV_NAMESPACE_ID: ${{ vars.CF_BACKUP_KV_NAMESPACE_ID || secrets.CF_BACKUP_KV_NAMESPACE_ID }}
         run: |
           cd ${{ env.SUPABASE_DIR }}
           sed -i -E '/^CF_(ACCOUNT_ID|KV_NAMESPACE_ID|API_TOKEN|REFRESH_TOKEN)=/d' .env 2>/dev/null || true
-          {
-            echo "CF_ACCOUNT_ID=1b0b7964eefd07d50f77f95b61799b9d"
-            echo "CF_KV_NAMESPACE_ID=df7be92c5212458884bcceca632cd6b0"
-          } >> .env
+
+          if [ -n "${CF_BACKUP_ACCOUNT_ID}" ] && [ -n "${CF_BACKUP_KV_NAMESPACE_ID}" ]; then
+            {
+              echo "CF_ACCOUNT_ID=${CF_BACKUP_ACCOUNT_ID}"
+              echo "CF_KV_NAMESPACE_ID=${CF_BACKUP_KV_NAMESPACE_ID}"
+            } >> .env
+            echo "  Cloudflare KV backup target configured (namespace ${CF_BACKUP_KV_NAMESPACE_ID})"
+          else
+            echo "  ::warning::CF_BACKUP_ACCOUNT_ID / CF_BACKUP_KV_NAMESPACE_ID not configured — off-site KV backup will be skipped"
+          fi
 
           # (The archived rotated refresh token is loaded further down, only
           # when it is actually needed  avoids a second CF_REFRESH_TOKEN line
@@ -1033,7 +1041,7 @@ jobs:
               echo "|  **Studio Dashboard** | [https://$DOMAIN](https://$DOMAIN) |"
               echo "|  **Redis Web Dashboard** | [https://$REDIS_SUBDOMAIN](https://$REDIS_SUBDOMAIN) *(route to \`localhost:8081\` in CF Zero Trust)* |"
               if [ -n "${REDIS_TCP_PORT:-}" ]; then
-                echo "|  **Redis Direct TCP** | \`redis://default:${REDIS_PASSWORD:-Basudevkr123}@$REDIS_SUBDOMAIN:${REDIS_TCP_PORT}\` |"
+                echo "|  **Redis Direct TCP** | \`redis://default:${REDIS_PASSWORD}@$REDIS_SUBDOMAIN:${REDIS_TCP_PORT}\` |"
               fi
               echo "|  **Redis Cache API** | [https://$DOMAIN/functions/v1/cache](https://$DOMAIN/functions/v1/cache) |"
               echo "|  **REST API** | [https://$DOMAIN/rest/v1/](https://$DOMAIN/rest/v1/) |"
@@ -1041,9 +1049,9 @@ jobs:
               echo ""
               if [ -n "${REDIS_TCP_PORT:-}" ]; then
                 echo "####  Connect to Redis from Anywhere:"
-                echo "- **Permanent URI**: \`redis://default:${REDIS_PASSWORD:-Basudevkr123}@$REDIS_SUBDOMAIN:${REDIS_TCP_PORT}\` *(requires CNAME \`$REDIS_SUBDOMAIN\`  \`bore.pub\` in DNS)*"
-                echo "- **Direct Relay URI**: \`redis://default:${REDIS_PASSWORD:-Basudevkr123}@${REDIS_TCP_HOST:-bore.pub}:${REDIS_TCP_PORT}\`"
-                echo "- **CLI Command**: \`redis-cli -h ${REDIS_TCP_HOST:-bore.pub} -p ${REDIS_TCP_PORT} -a ${REDIS_PASSWORD:-Basudevkr123}\`"
+                echo "- **Permanent URI**: \`redis://default:${REDIS_PASSWORD}@$REDIS_SUBDOMAIN:${REDIS_TCP_PORT}\` *(requires CNAME \`$REDIS_SUBDOMAIN\`  \`bore.pub\` in DNS)*"
+                echo "- **Direct Relay URI**: \`redis://default:${REDIS_PASSWORD}@${REDIS_TCP_HOST:-bore.pub}:${REDIS_TCP_PORT}\`"
+                echo "- **CLI Command**: \`redis-cli -h ${REDIS_TCP_HOST:-bore.pub} -p ${REDIS_TCP_PORT} -a ${REDIS_PASSWORD}\`"
                 echo ""
               fi
               echo "- **Redis Web GUI**: [https://$REDIS_SUBDOMAIN](https://$REDIS_SUBDOMAIN) (credentials: \`redis\` / \`redis\`)"
