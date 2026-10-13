@@ -1,0 +1,16 @@
+# Temporary registration probe: proves whether GitHub indexes workflow files in
+# this repository at all. `workflow_dispatch` only — it never runs on its own.
+name: Workflow registration probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo "workflow files in this repository are registered"
