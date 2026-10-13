@@ -42,6 +42,11 @@
 #                             continuity). Without it, state persists only via
 #                             the Actions cache + runner-local archive.
 # =============================================================================
+#
+# Repository: https://github.com/apunabhibhilegendhai/Supabase-Actions
+# The secrets listed above are configured on that repository (Settings → Secrets
+# and variables → Actions); CF_TUNNEL_DOMAIN lives in the Variables tab.
+# =============================================================================
 
 name:  Full Supabase Self-Hosted
 run-name:  Full Supabase Self-Hosted${{ github.event.inputs.triggered_by == 'workflow-watchman' && ' (watchman)' || '' }}
