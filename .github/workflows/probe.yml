@@ -1,5 +1,6 @@
 # Temporary registration probe: proves whether GitHub indexes workflow files in
-# this repository at all. `workflow_dispatch` only — it never runs on its own.
+# this repository, and reports why supabase-host.yml is rejected if it is.
+# `workflow_dispatch` only — it never runs on its own.
 name: Workflow registration probe
 
 on:
@@ -13,4 +14,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - run: echo "workflow files in this repository are registered"
+      - uses: actions/checkout@v5
+
+      - name: Parse supabase-host.yml
+        run: |
+          python3 - <<'EOF'
+          import sys, yaml
+          path = ".github/workflows/supabase-host.yml"
+          try:
+              with open(path, encoding="utf-8") as fh:
+                  doc = yaml.safe_load(fh)
+          except Exception as exc:                     # noqa: BLE001
+              print(f"YAML ERROR in {path}: {exc}")
+              sys.exit(1)
+
+          print("parsed OK, top-level keys:", list(doc))
+          triggers = doc.get("on", doc.get(True))
+          print("triggers:", triggers)
+          jobs = doc.get("jobs") or {}
+          print("jobs:", list(jobs))
+          for name, job in jobs.items():
+              if not isinstance(job, dict) or "runs-on" not in job:
+                  print(f"PROBLEM: job {name!r} has no runs-on -> {job}")
+              for i, step in enumerate(job.get("steps") or []):
+                  if not isinstance(step, dict):
+                      print(f"PROBLEM: job {name!r} step {i} is not a mapping -> {step!r}")
+                      continue
+                  if not any(k in step for k in ("uses", "run")):
+                      print(f"PROBLEM: job {name!r} step {i} has neither uses: nor run: -> {step}")
+          EOF
