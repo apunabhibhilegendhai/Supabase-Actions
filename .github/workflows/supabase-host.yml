@@ -340,8 +340,8 @@ jobs:
           cd ${{ env.SUPABASE_DIR }}
           sed -i -E '/^CF_(ACCOUNT_ID|KV_NAMESPACE_ID|API_TOKEN|REFRESH_TOKEN)=/d' .env 2>/dev/null || true
           {
-            echo "CF_ACCOUNT_ID=fb944101733d9b14aa29e5be59073eb2"
-            echo "CF_KV_NAMESPACE_ID=f7ad38b06543440a94b4c073a04b4bf3"
+            echo "CF_ACCOUNT_ID=1b0b7964eefd07d50f77f95b61799b9d"
+            echo "CF_KV_NAMESPACE_ID=df7be92c5212458884bcceca632cd6b0"
           } >> .env
 
           # (The archived rotated refresh token is loaded further down, only
