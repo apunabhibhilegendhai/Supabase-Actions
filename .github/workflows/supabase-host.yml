@@ -961,8 +961,14 @@ jobs:
           GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO opendrive_app;
           ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO opendrive_app;
           ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO opendrive_app;
+
+          -- 102-opendrive-harden-rls-and-grants.sql revokes ALL on the migration ledger from
+          -- opendrive_app (it is bookkeeping, not an API resource). This step runs after the
+          -- migrations, so the blanket grant above would silently undo that hardening — take it
+          -- back out here rather than relying on the ordering.
+          REVOKE ALL ON TABLE public._schema_migrations FROM opendrive_app;
           OPENDRIVE_GRANTS_SQL
-          echo "opendrive_app runtime grants applied"
+          echo "opendrive_app runtime grants applied (migration ledger excluded)"
 
       #  Confirm all unconfirmed users (fixes stuck signups) 
       # If ENABLE_EMAIL_AUTOCONFIRM was false in a previous session and Inbucket
