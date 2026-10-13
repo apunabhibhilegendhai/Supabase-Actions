@@ -400,6 +400,18 @@ services:
     # To upgrade an existing Postgres 15 database in place, see utils/upgrade-pg17.sh.
     image: supabase/postgres:17.6.1.136
     restart: unless-stopped
+    # `db` published NO host port: the only host-side route to Postgres was Supavisor
+    # (${POSTGRES_PORT}), and that container never comes up on this runner. The result
+    # was that tcp://localhost:5432 refused every connection, Cloudflare answered 502,
+    # `cloudflared access tcp` reported "websocket: bad handshake", and OpenDrive's
+    # database pre-flight died with ECONNRESET on every run.
+    #
+    # Publish the primary directly too. The tunnel ingress points here, and this is the
+    # service this workflow waits on, restores and migrates — so its health is proven
+    # every single session instead of depending on an optional pooler. 5433 matches the
+    # tunnel ingress the Access route was originally written for.
+    ports:
+      - "${OPENDB_PORT:-5433}:5432"
     volumes:
       - ./volumes/db/realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:Z
       # Must be superuser to create event trigger

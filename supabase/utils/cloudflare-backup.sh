@@ -207,7 +207,10 @@ get_value() {  # get_value <key> <outfile>  (curl exit code 0 = found)
 
 # ---------------------------------------------------------------------------
 cmd_push() {
-  local file="${2:-}"
+  # argv here is the ARGUMENTS ONLY: the dispatcher shifts the subcommand off, and
+  # snapshot-state.sh invokes the CLI. Reading "$2" instead meant the positional was
+  # always empty when cmd_verify called a sibling function directly.
+  local file="${1:-}"
   load_cfg
   if ! cfg_ok; then
     echo "  ::warning::Cloudflare backup SKIPPED — CF_API_TOKEN/CF_KV_NAMESPACE_ID not configured"
@@ -252,7 +255,9 @@ cmd_push() {
 }
 
 cmd_restore() {
-  local outfile="${2:-}"
+  # argv is ARGUMENTS ONLY (dispatcher shifts the subcommand). cmd_verify calls this
+  # with a single path, so "$2" was empty and restore always printed its usage line.
+  local outfile="${1:-}"
   load_cfg
   if ! cfg_ok; then
     echo "  ☁️  Cloudflare restore SKIPPED — CF_API_TOKEN/CF_KV_NAMESPACE_ID not configured"
@@ -380,8 +385,8 @@ cmd_list() {
 
 # ---------------------------------------------------------------------------
 case "${1:-}" in
-  push)    cmd_push "$@" ;;
-  restore) cmd_restore "$@" ;;
+  push)    shift; cmd_push "$@" ;;
+  restore) shift; cmd_restore "$@" ;;
   manifest) cmd_manifest "$@" ;;
   verify)  cmd_verify "$@" ;;
   refresh) cmd_refresh "$@" ;;

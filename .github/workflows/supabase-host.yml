@@ -859,6 +859,39 @@ jobs:
           echo "All services ready!"
           docker compose ps 2>/dev/null | head -15
 
+      #  Ensure the OpenDrive application role (every session) 
+      # docker-entrypoint-initdb.d scripts only run on a brand-new data directory, and a
+      # pg_dump snapshot carries no roles at all — so after the upstream revert deleted
+      # opendrive_role.sql, a restored session simply had no `opendrive_app`, and every
+      # OpenDrive connection was refused. This recreates it idempotently on every startup,
+      # before migrations (docs/SELF-HOSTED-BACKEND.md, "How OpenDrive gets a database role").
+      - name:  Ensure the OpenDrive application role
+        env:
+          OPENDRIVE_APP_PASSWORD: ${{ secrets.OPENDRIVE_APP_PASSWORD }}
+        run: |
+          cd ${{ env.SUPABASE_DIR }}
+          : "${OPENDRIVE_APP_PASSWORD:?set the OPENDRIVE_APP_PASSWORD secret}"
+
+          for i in $(seq 1 60); do
+            if docker compose exec -T db pg_isready -U postgres >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+
+          # :'VAR' is NOT interpolated inside a $$ ... $$ block, so the CREATE is built
+          # with format(%L) and handed to \gexec instead of being put in a DO block.
+          docker compose exec -T db psql -U postgres -v ON_ERROR_STOP=1 -v OPENDRIVE_APP_PASSWORD="$OPENDRIVE_APP_PASSWORD" <<'OPENDRIVE_ROLE_SQL'
+          SELECT format('CREATE ROLE opendrive_app WITH LOGIN BYPASSRLS PASSWORD %L', :'OPENDRIVE_APP_PASSWORD')
+            WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'opendrive_app')
+          \gexec
+          ALTER ROLE opendrive_app WITH LOGIN BYPASSRLS PASSWORD :'OPENDRIVE_APP_PASSWORD';
+          GRANT CONNECT ON DATABASE postgres TO opendrive_app;
+          GRANT USAGE ON SCHEMA public TO opendrive_app;
+          GRANT CREATE ON SCHEMA public TO opendrive_app;
+          OPENDRIVE_ROLE_SQL
+          echo "opendrive_app role present with the configured password"
+
       #  Apply committed migrations (versioned schema changes) 
       # Applies supabase/migrations/*.sql on top of the restored DB (fresh DBs
       # already get the volumes/db/*.sql init scripts at first boot). Files are
@@ -913,6 +946,23 @@ jobs:
           if [ "$APPLIED" -eq 0 ]; then
             echo "  No new migrations (supabase/migrations empty or up to date)"
           fi
+
+      #  Grant the OpenDrive application role its runtime DML 
+      # Runs AFTER migrations so tables created by them are covered. BYPASSRLS only
+      # bypasses row-level security — the role owns nothing, so it still needs explicit
+      # table, sequence and function privileges.
+      - name:  Grant the OpenDrive application role its runtime DML
+        run: |
+          cd ${{ env.SUPABASE_DIR }}
+
+          docker compose exec -T db psql -U postgres -v ON_ERROR_STOP=1 <<'OPENDRIVE_GRANTS_SQL'
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO opendrive_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO opendrive_app;
+          GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO opendrive_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO opendrive_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO opendrive_app;
+          OPENDRIVE_GRANTS_SQL
+          echo "opendrive_app runtime grants applied"
 
       #  Confirm all unconfirmed users (fixes stuck signups) 
       # If ENABLE_EMAIL_AUTOCONFIRM was false in a previous session and Inbucket
