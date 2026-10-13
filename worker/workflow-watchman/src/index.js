@@ -1,27 +1,36 @@
 /**
  * workflow-watchman — Cloudflare Worker
  * ---------------------------------------
- * Monitors the supabase-actions repo and restarts any workflow that has been
- * inactive/dead longer than its grace period.
+ * Monitors the Supabase-Actions and OpenDrive repos and restarts either
+ * workflow when it has been inactive/dead longer than its grace period.
  *
  * Repo-specific behaviour:
- *   - supabase-actions (supabase-host.yml): 1 min grace — 24/7 session chaining
- *     (fast-polled EVERY minute so the handoff gap stays ~1-2 min)
+ *   - Supabase-Actions (supabase-host.yml): 1 min grace — 24/7 session chaining
+ *   - OpenDrive        (api-host.yml):      90 s grace — 24/7 session chaining
+ *     (both are fast-polled EVERY minute so the handoff gap stays ~1-2 min)
  */
 
 const OWNER = "apunabhibhilegendhai";
 
 // ===== Per-repo configuration ================================================
+// ONLY these two repositories are watched — everything else is intentionally
+// absent. Both hold a single long-running (≈5h) session and need to be chained
+// around the clock; the end-of-run self-chain handles the normal handoff and
+// this worker covers what the self-chain cannot (a cancelled run, or a runner
+// hard-killed at the 6h limit).
 const REPO_CONFIGS = [
-  // supabase-actions — 24/7 self-hosted Supabase. Sessions run ~5h05m then stop;
-  // restart the moment one completes so the stack is up around the clock.
-  // Short grace = fast handoff. The repo's own 6-hour schedule still runs as a
-  // no-cancel fallback (it queues behind the active session instead of killing it).
-  // fastPoll: true = checked on EVERY cron tick (1 min) so the dead gap is ~1-2 min.
-  // throttleMax 12: normal 24/7 chaining needs ~4-5 sessions/day; the headroom
-  // covers a rapid-fail loop (schedule + watchman double-triggering) without the
-  // watchman going silent for 24h.
-  { repo: "supabase-actions", workflow: "supabase-host.yml", branch: "master", graceMs: 60 * 1000, throttleMax: 12, fastPoll: true },
+  // Supabase self-hosted. Sessions run ~5h05m then stop; restart the moment one
+  // completes so the stack is up around the clock. Short grace = fast handoff.
+  // restartOnFailure: true — a mid-session death surfaces as a health-check
+  // `failure` and MUST be restarted.
+  { repo: "Supabase-Actions", workflow: "supabase-host.yml", branch: "master", graceMs: 60 * 1000, throttleMax: 12, fastPoll: true, restartOnFailure: true },
+
+  // OpenDrive API host. Sessions run ~5h then stop, same 24/7 chaining.
+  // restartOnFailure: false — this workflow only ever fails *fast*, in its
+  // up-front pre-flight (unreachable DATABASE_URL / tunnel), so restarting a
+  // `failure` would be a ~5-minute crash loop. Normal completion is chained by
+  // the workflow itself; a cancel or hard kill is what the worker is for.
+  { repo: "OpenDrive", workflow: "api-host.yml", branch: "main", graceMs: 90 * 1000, throttleMax: 10, fastPoll: true, restartOnFailure: false },
 ];
 
 const THROTTLE_WINDOW = 24 * 60 * 60 * 1000; // 24 hours
@@ -229,7 +238,7 @@ a { color:#3b82f6; }
 </head>
 <body>
 <h1>🛡️ workflow-watchman</h1>
-<p class="subtitle">Monitoring ${repos.length} repos • cron */1 * * * * (fast-poll supabase-actions)</p>
+<p class="subtitle">Monitoring ${repos.length} repos • cron */1 * * * * (fast-poll)</p>
 <table>
 <thead><tr><th>Repo</th><th>Status</th><th>Last Run</th><th>Age</th><th>Restarts</th></tr></thead>
 <tbody>${rows}</tbody>
@@ -313,6 +322,15 @@ async function evaluateRepo(config, headers) {
 
   // Grace period check
   if (age < graceMs) return state;
+
+  // Per-repo crash-loop guard: some workflows only ever fail *fast* (a pre-flight
+  // against an unreachable database), so restarting them on `failure` is a tight
+  // loop, not a recovery. Those opt out and fall back to their hourly schedule.
+  // Defaults to restarting on failure (a mid-session death must be recovered).
+  if (config.restartOnFailure === false && latest.conclusion === "failure") {
+    state.reason = "Last run failed — not auto-restarting (crash-loop guard)";
+    return state;
+  }
 
   // Throttle check — count completions within the 24h window from fetched runs
   const recentCompletions = runs.filter((r) => {
@@ -443,11 +461,10 @@ export default {
       return;
     }
     const headers = ghHeaders(token);
-    // Fast-poll gate: the cron fires every minute, but only repos flagged
-    // fastPoll (supabase-actions) are checked on EVERY tick. The node repos
-    // (20-min grace) only need checking every 5th minute, which keeps GitHub
-    // rate-limit and free-plan CPU usage low while the 24/7 chain gets
-    // ~1-minute detection of a dead session.
+    // Fast-poll gate: the cron fires every minute, and every configured repo is
+    // flagged `fastPoll`, so all of them are checked on EVERY tick (~1-minute
+    // detection of a dead session). The 5th-minute gate is retained for any
+    // future repo that wants a cheaper cadence.
     const isNodeTick = Math.floor(Date.now() / 60000) % 5 === 0;
     await runWithConcurrency(REPO_CONFIGS, 4, async (config) => {
       if (!config.fastPoll && !isNodeTick) return;

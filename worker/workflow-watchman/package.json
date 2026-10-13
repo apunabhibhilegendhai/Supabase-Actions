@@ -2,7 +2,7 @@
   "name": "workflow-watchman",
   "version": "1.0.0",
   "private": true,
-  "description": "Cloudflare Worker that monitors GitHub Actions workflows (node-1..node-18) and restarts dead ones",
+  "description": "Cloudflare Worker that restarts the long-running Supabase-Actions and OpenDrive workflows when they die (24/7 chaining)",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
