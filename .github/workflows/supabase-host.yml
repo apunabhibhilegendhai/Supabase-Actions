@@ -1291,7 +1291,7 @@ jobs:
             python3 -c 'import sys,json; d=json.load(sys.stdin); print(f"{d.get(\"total_size_bytes\",0)/1024/1024/1024:.2f} GB across {d.get(\"total_count\",0)} cache entries (limit 10 GB)")' 2>/dev/null || echo "unknown")
           echo "    GitHub cache usage: $USAGE"
 
-      #  Chain the next session 
+      #  Chain the next session
       # GitHub's `schedule` trigger has never fired for this repo (0 schedule
       # runs since it was created) and the external workflow-watchman worker has
       # never dispatched a run either — so the only reliable 24/7 handoff is the
